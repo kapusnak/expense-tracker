@@ -12,9 +12,9 @@ export interface RateLimitResult {
 
 /**
  * Simple fixed-window in-memory rate limiter.
- * Note: state is per server instance, so in a multi-instance/serverless
- * deployment this is a best-effort guard, not a global limit. For production
- * scale, back this with Redis/Upstash.
+ * On Railway this runs in a long-lived container, so a single replica keeps
+ * accurate counts. If you scale to multiple replicas, state is per-instance
+ * (best-effort only) — back it with Redis/Upstash for a global limit.
  */
 export function rateLimit(
   key: string,

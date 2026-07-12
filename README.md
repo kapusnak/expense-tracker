@@ -60,11 +60,33 @@ The app extracts amount, items, and one of four mindful categories:
 - `POST /api/process` — `{ "text": "..." }` → structured expense JSON
 - `POST /api/transcribe` — `FormData` with `audio` file → `{ "text": "..." }`
 
+## Deployment (Railway)
+
+The app is configured for containerized deployment on [Railway](https://railway.app) using Next.js standalone output.
+
+1. Create a new Railway project from this repo. Railway detects the `Dockerfile` (pinned via `railway.json`) and builds the image.
+2. Add the `OPENAI_API_KEY` variable (and optional model overrides) in the Railway service **Variables**.
+3. Deploy. Railway injects `PORT` at runtime, which the standalone `server.js` reads automatically (bound to `0.0.0.0`).
+
+Build/runtime details:
+
+- `next.config.ts` sets `output: "standalone"`, so the image ships only the traced server + `node_modules`.
+- The `Dockerfile` is multi-stage (deps → build → runtime) on Node 22 Alpine and runs as a non-root user.
+- Health check hits `/`.
+
+To build and run the container locally:
+
+```bash
+docker build -t klid .
+docker run -p 3000:3000 -e OPENAI_API_KEY=sk-... -e PORT=3000 klid
+```
+
 ## Notes
 
-- Data is stored in React state only (no database in this MVP).
+- Data is stored per-browser in `localStorage` (no database in this MVP).
 - Requires microphone permission for voice input.
 - Without `OPENAI_API_KEY`, API routes return a clear 503 error.
+- API routes are rate-limited in-memory per instance. On a single Railway replica this is accurate; scale-out needs a shared store (Redis/Upstash).
 
 ## Next steps
 
