@@ -1,14 +1,35 @@
 import { NextResponse } from "next/server";
-import { OPENAI_MODELS } from "@/lib/config";
+import { LIMITS, OPENAI_MODELS } from "@/lib/config";
 import { getOpenAIClient } from "@/lib/openai";
+import { getClientKey, rateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
+  const { allowed, retryAfterSeconds } = rateLimit(
+    `transcribe:${getClientKey(request)}`,
+    LIMITS.transcribe.limit,
+    LIMITS.transcribe.windowMs,
+  );
+
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Moc rychle. Dej tomu chvíli a zkus to znovu." },
+      { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+    );
+  }
+
   try {
     const formData = await request.formData();
     const audio = formData.get("audio");
 
     if (!(audio instanceof File) || audio.size === 0) {
-      return NextResponse.json({ error: "Audio file is required." }, { status: 400 });
+      return NextResponse.json({ error: "Audio je povinné." }, { status: 400 });
+    }
+
+    if (audio.size > LIMITS.maxAudioBytes) {
+      return NextResponse.json(
+        { error: "Nahrávka je moc velká." },
+        { status: 413 },
+      );
     }
 
     const openai = getOpenAIClient();
@@ -24,18 +45,25 @@ export async function POST(request: Request) {
 
     if (!text) {
       return NextResponse.json(
-        { error: "Could not transcribe audio. Try again or type it." },
+        { error: "Nepodařilo se rozpoznat řeč. Zkus to napsat." },
         { status: 422 },
       );
     }
 
     return NextResponse.json({ text });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to transcribe audio.";
+    console.error("[/api/transcribe]", error);
 
-    const status = message.includes("OPENAI_API_KEY") ? 503 : 500;
+    if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
+      return NextResponse.json(
+        { error: "Služba není nakonfigurovaná. Chybí API klíč." },
+        { status: 503 },
+      );
+    }
 
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json(
+      { error: "Hlas se nepodařilo zpracovat. Zkus to znovu." },
+      { status: 500 },
+    );
   }
 }

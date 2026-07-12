@@ -11,6 +11,7 @@ export interface TradeRecord {
   id: number;
   text: string;
   amount: number;
+  currency: string;
   intent: ExpenseIntent;
   time: string;
 }

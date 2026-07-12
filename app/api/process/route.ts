@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { EXPENSE_INTENTS, OPENAI_MODELS } from "@/lib/config";
+import { EXPENSE_INTENTS, LIMITS, OPENAI_MODELS } from "@/lib/config";
 import { getOpenAIClient } from "@/lib/openai";
+import { getClientKey, rateLimit } from "@/lib/rate-limit";
 import type { ProcessedExpense } from "@/lib/types";
 
 const EXTRACTION_SCHEMA = {
@@ -42,12 +43,32 @@ Return JSON with:
 Be concise. If amount is unclear, make a reasonable estimate and keep items descriptive.`;
 
 export async function POST(request: Request) {
+  const { allowed, retryAfterSeconds } = rateLimit(
+    `process:${getClientKey(request)}`,
+    LIMITS.process.limit,
+    LIMITS.process.windowMs,
+  );
+
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Moc rychle. Dej tomu chvíli a zkus to znovu." },
+      { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+    );
+  }
+
   try {
     const body = (await request.json()) as { text?: string };
     const text = body.text?.trim();
 
     if (!text) {
-      return NextResponse.json({ error: "Text is required." }, { status: 400 });
+      return NextResponse.json({ error: "Text je povinný." }, { status: 400 });
+    }
+
+    if (text.length > LIMITS.maxInputChars) {
+      return NextResponse.json(
+        { error: `Text je moc dlouhý (max ${LIMITS.maxInputChars} znaků).` },
+        { status: 413 },
+      );
     }
 
     const openai = getOpenAIClient();
@@ -84,11 +105,18 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to process expense.";
+    console.error("[/api/process]", error);
 
-    const status = message.includes("OPENAI_API_KEY") ? 503 : 500;
+    if (error instanceof Error && error.message.includes("OPENAI_API_KEY")) {
+      return NextResponse.json(
+        { error: "Služba není nakonfigurovaná. Chybí API klíč." },
+        { status: 503 },
+      );
+    }
 
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json(
+      { error: "Výdaj se nepodařilo zpracovat. Zkus to znovu." },
+      { status: 500 },
+    );
   }
 }

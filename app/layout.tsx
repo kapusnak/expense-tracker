@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 
@@ -10,6 +10,18 @@ const geistSans = Geist({
 export const metadata: Metadata = {
   title: "Klid — Calm Spend",
   description: "Zero-UI expense tracker. Klid za $10 měsíčně.",
+  appleWebApp: {
+    capable: true,
+    title: "Klid",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#FBFBFA",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({

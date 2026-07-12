@@ -1,42 +1,36 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   CheckCircle2,
+  ChevronUp,
   History,
   Mic,
   Send,
   ShieldCheck,
 } from "lucide-react";
-import type { ProcessedExpense, TradeRecord } from "@/lib/types";
+import {
+  addExpense,
+  getServerSnapshot,
+  getSnapshot,
+  subscribe,
+} from "@/lib/store";
+import type { ProcessedExpense } from "@/lib/types";
 
-const INITIAL_BUDGET = 18_420;
-const MAX_HISTORY = 3;
+const BASE_CURRENCY = "Kč";
 
-const INITIAL_TRADES: TradeRecord[] = [
-  {
-    id: 1,
-    text: "CrossFit členství",
-    amount: 1500,
-    intent: "Investice do sebe",
-    time: "Včera",
-  },
-  {
-    id: 2,
-    text: "Večeře s rodinou",
-    amount: 1240,
-    intent: "Rodina & Vztahy",
-    time: "Před 2 dny",
-  },
-];
-
-function formatRemaining(amount: number): string {
+function formatAmount(amount: number): string {
   return amount.toLocaleString("cs-CZ");
 }
 
 function buildStatusMessage(remaining: number, expense?: ProcessedExpense): string {
   if (!expense) {
-    return `Tento měsíc jsi v naprostém klidu. Zbývá ti ještě ${formatRemaining(remaining)} Kč.`;
+    return `Tento měsíc jsi v naprostém klidu. Zbývá ti ještě ${formatAmount(remaining)} ${BASE_CURRENCY}.`;
   }
 
   const intentMessages: Record<ProcessedExpense["intent"], string> = {
@@ -46,7 +40,7 @@ function buildStatusMessage(remaining: number, expense?: ProcessedExpense): stri
     "Rodina & Vztahy": "Udělal jsi radost blízkým. Rozpočet to zvládne.",
   };
 
-  return `${intentMessages[expense.intent]} Tvůj vědomý zůstatek je teď ${formatRemaining(remaining)} Kč.`;
+  return `${intentMessages[expense.intent]} Tvůj vědomý zůstatek je teď ${formatAmount(remaining)} ${BASE_CURRENCY}.`;
 }
 
 async function processExpenseText(text: string): Promise<ProcessedExpense> {
@@ -88,23 +82,28 @@ async function transcribeAudio(blob: Blob): Promise<string> {
 }
 
 export default function CalmSpendPage() {
+  const { remainingBudget, recentTrades } = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getServerSnapshot,
+  );
+
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [remainingBudget, setRemainingBudget] = useState(INITIAL_BUDGET);
-  const [statusMessage, setStatusMessage] = useState(() =>
-    buildStatusMessage(INITIAL_BUDGET),
-  );
-  const [recentTrades, setRecentTrades] = useState<TradeRecord[]>(INITIAL_TRADES);
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastAdded, setLastAdded] = useState<ProcessedExpense | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const isRecordingRef = useRef(false);
   const isProcessingRef = useRef(false);
+  const touchStartYRef = useRef<number | null>(null);
+
+  const statusMessage = buildStatusMessage(remainingBudget, lastAdded ?? undefined);
 
   const cleanupStream = useCallback(() => {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -112,28 +111,11 @@ export default function CalmSpendPage() {
   }, []);
 
   const applyExpense = useCallback((result: ProcessedExpense) => {
-    const nextRemaining = remainingBudget - result.amount;
-
-    setRemainingBudget(nextRemaining);
+    addExpense(result);
     setLastAdded(result);
     setShowSuccess(true);
-    setStatusMessage(buildStatusMessage(nextRemaining, result));
-
-    setRecentTrades((prev) =>
-      [
-        {
-          id: Date.now(),
-          text: result.item,
-          amount: result.amount,
-          intent: result.intent,
-          time: "Teď",
-        },
-        ...prev,
-      ].slice(0, MAX_HISTORY),
-    );
-
     window.setTimeout(() => setShowSuccess(false), 4000);
-  }, [remainingBudget]);
+  }, []);
 
   const runProcess = useCallback(
     async (text: string) => {
@@ -192,7 +174,9 @@ export default function CalmSpendPage() {
 
     cleanupStream();
 
-    const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+    const blob = new Blob(audioChunksRef.current, {
+      type: recorder.mimeType || "audio/webm",
+    });
     audioChunksRef.current = [];
 
     if (blob.size === 0) return;
@@ -255,6 +239,37 @@ export default function CalmSpendPage() {
     setInput("");
   };
 
+  const handleMicKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== " " && event.key !== "Enter") return;
+    event.preventDefault();
+    if (event.repeat) return;
+    void startRecording();
+  };
+
+  const handleMicKeyUp = (event: React.KeyboardEvent) => {
+    if (event.key !== " " && event.key !== "Enter") return;
+    event.preventDefault();
+    void stopRecording();
+  };
+
+  const handleHandleTouchStart = (event: React.TouchEvent) => {
+    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleHandleTouchEnd = (event: React.TouchEvent) => {
+    const startY = touchStartYRef.current;
+    touchStartYRef.current = null;
+    if (startY === null) return;
+
+    const endY = event.changedTouches[0]?.clientY ?? startY;
+    const delta = startY - endY;
+
+    if (Math.abs(delta) > 30) {
+      event.preventDefault();
+      setHistoryOpen(delta > 0);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#FBFBFA] text-[#2C2A29] flex flex-col justify-between p-6 font-sans antialiased">
       <header className="flex justify-between items-center max-w-md w-full mx-auto pt-4">
@@ -289,7 +304,10 @@ export default function CalmSpendPage() {
               <p className="text-xs text-neutral-400">Přemýšlím...</p>
             )}
             {!showSuccess && !isProcessing && errorMessage && (
-              <p className="text-xs text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
+              <p
+                role="alert"
+                className="text-xs text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-100"
+              >
                 {errorMessage}
               </p>
             )}
@@ -297,7 +315,12 @@ export default function CalmSpendPage() {
 
           <button
             type="button"
-            aria-label={isRecording ? "Nahrávám hlas" : "Podrž a řekni, co jsi koupil"}
+            aria-label={
+              isRecording
+                ? "Nahrávám hlas, pusť pro dokončení"
+                : "Podrž a řekni, co jsi koupil"
+            }
+            aria-pressed={isRecording}
             disabled={isProcessing}
             onPointerDown={(event) => {
               event.preventDefault();
@@ -314,7 +337,9 @@ export default function CalmSpendPage() {
                 void stopRecording();
               }
             }}
-            className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-300 transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed touch-none ${
+            onKeyDown={handleMicKeyDown}
+            onKeyUp={handleMicKeyUp}
+            className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-300 transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed touch-none focus:outline-none focus-visible:ring-4 focus-visible:ring-neutral-300 ${
               isRecording
                 ? "bg-red-500 text-white shadow-lg shadow-red-200 scale-105"
                 : "bg-neutral-900 text-white shadow-xl shadow-neutral-200 hover:bg-neutral-800"
@@ -345,11 +370,13 @@ export default function CalmSpendPage() {
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder="Nebo to sem prostě napiš..."
+              maxLength={500}
               disabled={isProcessing}
               className="w-full bg-neutral-100 border-none rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-200 text-neutral-700 placeholder-neutral-400 transition-all disabled:opacity-60"
             />
             <button
               type="submit"
+              aria-label="Odeslat výdaj"
               disabled={isProcessing || !input.trim()}
               className="absolute right-3 top-2.5 text-neutral-400 hover:text-neutral-600 disabled:opacity-40"
             >
@@ -359,31 +386,62 @@ export default function CalmSpendPage() {
         </div>
       </main>
 
-      <footer className="max-w-md w-full mx-auto bg-white rounded-2xl p-4 border border-neutral-100 shadow-sm mt-auto">
-        <div className="flex items-center gap-2 mb-3 text-neutral-400">
-          <History className="w-3.5 h-3.5" />
-          <span className="text-xs font-medium uppercase tracking-wider">
-            Poslední vědomé výdaje
+      <footer className="max-w-md w-full mx-auto bg-white rounded-2xl border border-neutral-100 shadow-sm mt-auto overflow-hidden">
+        <button
+          type="button"
+          aria-expanded={historyOpen}
+          aria-controls="history-panel"
+          onClick={() => setHistoryOpen((open) => !open)}
+          onTouchStart={handleHandleTouchStart}
+          onTouchEnd={handleHandleTouchEnd}
+          className="w-full flex items-center justify-between px-4 py-3 text-neutral-400 touch-pan-y focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-200"
+        >
+          <span className="flex items-center gap-2">
+            <History className="w-3.5 h-3.5" />
+            <span className="text-xs font-medium uppercase tracking-wider">
+              Poslední vědomé výdaje
+            </span>
           </span>
-        </div>
-        <div className="space-y-2.5">
-          {recentTrades.map((trade) => (
-            <div
-              key={trade.id}
-              className="flex justify-between items-center text-sm py-1 border-b border-neutral-50 last:border-0"
-            >
-              <div>
-                <p className="font-medium text-neutral-800 capitalize">{trade.text}</p>
-                <span className="text-[11px] bg-neutral-100 text-neutral-500 px-2 py-0.5 rounded-full font-normal">
-                  {trade.intent}
-                </span>
-              </div>
-              <div className="text-right">
-                <p className="font-semibold text-neutral-900">-{trade.amount} Kč</p>
-                <p className="text-[10px] text-neutral-400">{trade.time}</p>
-              </div>
+          <ChevronUp
+            className={`w-4 h-4 transition-transform duration-300 ${
+              historyOpen ? "" : "rotate-180"
+            }`}
+          />
+        </button>
+
+        <div
+          id="history-panel"
+          className={`grid transition-all duration-300 ease-out ${
+            historyOpen
+              ? "grid-rows-[1fr] opacity-100"
+              : "grid-rows-[0fr] opacity-0"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <div className="space-y-2.5 px-4 pb-4">
+              {recentTrades.map((trade) => (
+                <div
+                  key={trade.id}
+                  className="flex justify-between items-center text-sm py-1 border-b border-neutral-50 last:border-0"
+                >
+                  <div>
+                    <p className="font-medium text-neutral-800 capitalize">
+                      {trade.text}
+                    </p>
+                    <span className="text-[11px] bg-neutral-100 text-neutral-500 px-2 py-0.5 rounded-full font-normal">
+                      {trade.intent}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold text-neutral-900">
+                      -{trade.amount} {trade.currency}
+                    </p>
+                    <p className="text-[10px] text-neutral-400">{trade.time}</p>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       </footer>
     </div>

@@ -3,6 +3,13 @@ export const OPENAI_MODELS = {
   transcription: process.env.OPENAI_TRANSCRIPTION_MODEL ?? "gpt-4o-mini-transcribe",
 } as const;
 
+export const LIMITS = {
+  maxInputChars: 500,
+  process: { limit: 20, windowMs: 60_000 },
+  transcribe: { limit: 10, windowMs: 60_000 },
+  maxAudioBytes: 20 * 1024 * 1024,
+} as const;
+
 export const EXPENSE_INTENTS = [
   "Nezbytné závazky",
   "Radost & Život",
